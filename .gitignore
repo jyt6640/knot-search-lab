@@ -1,0 +1,12 @@
+.gradle/
+build/
+out/
+bin/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+.env*
+!.env.example
+src/main/resources/application-local.properties
+*.log

@@ -1,0 +1,168 @@
+package com.knot.backend.auth.presentation;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
+
+import com.knot.backend.auth.application.AuthService;
+import com.knot.backend.auth.application.AuthRefreshService;
+import com.knot.backend.auth.application.dto.command.CompleteNicknameCommand;
+import com.knot.backend.auth.application.dto.result.AuthLoginResult;
+import com.knot.backend.auth.application.dto.result.AuthRefreshResult;
+import com.knot.backend.auth.domain.model.AuthenticatedMember;
+import com.knot.backend.auth.presentation.dto.request.CompleteNicknameRequest;
+import com.knot.backend.auth.presentation.dto.response.AuthenticatedMemberResponse;
+import com.knot.backend.global.config.JwtProperties;
+import jakarta.servlet.http.Cookie;
+import java.time.Duration;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+class AuthControllerTest {
+
+    @Test
+    @DisplayName("인증된 member 정보를 응답 DTO로 반환한다")
+    void me_success() {
+        // given
+        AuthController controller = new AuthController(
+                mock(AuthService.class),
+                mock(AuthRefreshService.class),
+                new AuthCookieManager(new JwtProperties())
+        );
+        AuthenticatedMember member = AuthenticatedMember.of(
+                1L,
+                "octocat",
+                "https://example.com/avatar"
+        );
+
+        // when
+        AuthenticatedMemberResponse result = controller.me(member);
+
+        // then
+        assertThat(result.memberId()).isEqualTo(1L);
+        assertThat(result.nickname()).isEqualTo("octocat");
+    }
+
+    @Test
+    @DisplayName("닉네임 설정 요청이 성공하면 access token을 발급하고 닉네임 쿠키를 만료시킨다")
+    void completeNicknameSetup_success() {
+        // given
+        AuthService authService = mock(AuthService.class);
+        JwtProperties jwtProperties = new JwtProperties();
+        jwtProperties.setCookieName("KNOT_ACCESS_TOKEN");
+        jwtProperties.setNicknameCookieName("KNOT_NICKNAME_TOKEN");
+        jwtProperties.setExpiration(Duration.ofHours(1));
+        jwtProperties.setSecure(false);
+        AuthController controller = new AuthController(
+                authService,
+                mock(AuthRefreshService.class),
+                new AuthCookieManager(jwtProperties)
+        );
+        when(
+                authService.completeNicknameSetup(
+                        new CompleteNicknameCommand(
+                                "nickname-token",
+                                "octocat"
+                        )
+                )
+        ).thenReturn(
+                AuthLoginResult.authenticated(
+                        "access-token",
+                        "refresh-token",
+                        Duration.ofDays(7)
+                )
+        );
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        // when
+        ResponseEntity<Void> result = controller.completeNicknameSetup(
+                "nickname-token",
+                new CompleteNicknameRequest("octocat"),
+                response
+        );
+
+        // then
+        assertThat(
+                result.getStatusCode()
+                        .value()
+        ).isEqualTo(204);
+        assertThat(
+                response.getCookie("KNOT_ACCESS_TOKEN")
+                        .getValue()
+        ).isEqualTo("access-token");
+        assertThat(
+                response.getCookie("KNOT_REFRESH_TOKEN")
+                        .getValue()
+        ).isEqualTo("refresh-token");
+        assertThat(
+                response.getCookie("KNOT_REFRESH_TOKEN")
+                        .getMaxAge()
+        ).isEqualTo(7 * 86400);
+        Cookie nicknameCookie = response.getCookie("KNOT_NICKNAME_TOKEN");
+        assertThat(nicknameCookie).isNotNull();
+        assertThat(nicknameCookie.getMaxAge()).isZero();
+    }
+
+    @Test
+    @DisplayName("refresh 요청이 성공하면 access·refresh 쿠키를 교체한다")
+    void refresh_success_setsLoginCookies() {
+        // given
+        AuthRefreshService authRefreshService = mock(AuthRefreshService.class);
+        JwtProperties jwtProperties = new JwtProperties();
+        jwtProperties.setCookieName("KNOT_ACCESS_TOKEN");
+        jwtProperties.setRefreshCookieName("KNOT_REFRESH_TOKEN");
+        jwtProperties.setExpiration(Duration.ofHours(1));
+        jwtProperties.setSecure(false);
+        AuthController controller = new AuthController(
+                mock(AuthService.class),
+                authRefreshService,
+                new AuthCookieManager(jwtProperties)
+        );
+        when(authRefreshService.refresh("current-refresh-token")).thenReturn(
+                new AuthRefreshResult(
+                        "new-access-token",
+                        "new-refresh-token",
+                        Duration.ofDays(6)
+                )
+        );
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setCookies(
+                new Cookie(
+                        "KNOT_REFRESH_TOKEN",
+                        "current-refresh-token"
+                )
+        );
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        // when
+        ResponseEntity<Void> result = controller.refresh(
+                request,
+                response
+        );
+
+        // then
+        assertThat(
+                result.getStatusCode()
+                        .value()
+        ).isEqualTo(204);
+        assertThat(
+                response.getCookie("KNOT_ACCESS_TOKEN")
+                        .getValue()
+        ).isEqualTo("new-access-token");
+        assertThat(
+                response.getCookie("KNOT_ACCESS_TOKEN")
+                        .getMaxAge()
+        ).isEqualTo(3600);
+        assertThat(
+                response.getCookie("KNOT_REFRESH_TOKEN")
+                        .getValue()
+        ).isEqualTo("new-refresh-token");
+        assertThat(
+                response.getCookie("KNOT_REFRESH_TOKEN")
+                        .getMaxAge()
+        ).isEqualTo(6 * 86400);
+    }
+}

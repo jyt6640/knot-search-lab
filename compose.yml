@@ -1,0 +1,46 @@
+name: knot-search-lab
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: knot_lab
+      POSTGRES_USER: knot_lab
+      POSTGRES_PASSWORD: knot-lab-local-only
+    ports:
+      - "127.0.0.1:55441:5432"
+    volumes:
+      - search-lab-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knot_lab -d knot_lab"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.search-local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.search-local
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/knot_lab
+      DB_USERNAME: knot_lab
+      DB_PASSWORD: knot-lab-local-only
+      GITHUB_CLIENT_ID: local-search-lab
+      GITHUB_CLIENT_SECRET: local-search-lab
+      JWT_SECRET: local-search-lab-jwt-secret-not-for-other-environments
+      JWT_COOKIE_SECURE: "false"
+      AUTH_JWT_COOKIE_NAME: KNOT_ACCESS_TOKEN
+      AUTH_JWT_REFRESH_COOKIE_NAME: KNOT_REFRESH_TOKEN
+      AUTH_JWT_NICKNAME_COOKIE_NAME: KNOT_NICKNAME_TOKEN
+      AUTH_CORS_ALLOWED_ORIGINS: http://localhost:3000
+      SEARCH_MCP_BASE_URL: http://127.0.0.1:8080
+    ports:
+      - "127.0.0.1:18087:8080"
+
+volumes:
+  search-lab-postgres:
